@@ -1,0 +1,381 @@
+`timescale 1ns / 1ps
+
+
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: Parmar Rajdeep Pravinbhai and Pandya Abhishek Janakkumar
+// 
+// Create Date:    21:31:32 03/29/2021 
+// Design Name: RISC V Processor
+// Module Name:    RISC_processor_5_stage 
+// Project Name: RISC V Processor
+// Target Devices: 
+// Tool versions: 
+// Description: 
+//
+// Dependencies: 
+//
+// Revision: 
+// Revision 0.01 - File Created
+// Additional Comments: 
+//
+//////////////////////////////////////////////////////////////////////////////////
+
+
+module RISC_processor_5_stage( rst, clk   );
+	input clk,rst ;
+	reg [31:0]npc, pc, branch_address, f_instruction_register;//fetch stage
+	reg [7:0]instruction_memory[8191 - 1:0];//Fetch Stage
+	reg f_taken_branch;
+	reg [31:0]d_instruction_register,  d_rs1, d_rs2, d_imm;//decode stage
+	reg [1:0]d_forward_ctrl;//decode stage
+	reg [2:0]d_type;//decode stage
+	reg [3:0]d_alu_op;//decode stage
+	reg [4:0]d_rs1_address, d_rs2_address, d_rd_address, d_ex_rd, d_mem_rd, d_shamt;//decode stage
+	reg [31:0]reg_bank[31:0];//decode stage
+	reg [31:0]ex_rs1, ex_mem_result,	ex_rs2, ex_imm, ex_alu_result;//execute stage
+	reg [4:0]ex_rd_address;//execute stage
+	reg [3:0]ex_alu_op;//execute stage
+	reg [1:0]ex_forward_ctrl;//execute stage
+	//reg [2:0]psr;//execute stage
+	reg [2:0]psr;//execute stage
+	reg [2:0]ex_type;//execute stage
+	reg [4:0]ex_shamt;//execute stage
+	reg [31:0]ex_s_rs2;//execute stage
+	reg [31:0]operand1, operand2;// operand for execute stage used in alu
+	
+	reg [31:0]mem_address_result, mem_write_data, wb_mem_result, mem_alu_result, mem_read_data, mem_result;//mem stage
+	reg mem_rd_wr;//memory unit
+	reg [4:0]mem_rd_address;//memory stage
+	reg [2:0]mem_type;//memory stage
+	reg [2:0]mem_alu_op;//memory stage
+	reg [31:0]data_memory[8191:0];//data memory
+	reg [2:0]wb_type;//write back unit
+	reg [31:0]wb_data; //write back unit
+	reg [4:0]wb_rd_address; //write back unit
+	reg [2:0]wb_alu_op;//write back unit
+	reg j;
+	
+	initial
+		begin
+			reg_bank[0] = 32'd0;//Initialize the register bank with some data
+			reg_bank[1] = 32'd1;//Initialize the register bank with some data
+			reg_bank[2] = 32'd2;//Initialize the register bank with some data
+			reg_bank[3] = 32'd3;;//Initialize the register bank with some data
+			data_memory[0] = 32'd00;//Initialize the data memory with some data
+			data_memory[1] = 32'd10;//Initialize the data memory with some data
+			data_memory[2] = 32'd20;//Initialize the data memory with some data
+			pc = 0;//Initialize pc to the 0
+			npc = 0;//Initialize npc to the 0
+			$readmemb("C://Users//rajde//Documents//daiict assignment//Semester 2//Digital system architecture//5 stage pipeline processor//instruction_memory_v2.txt", instruction_memory);
+		end
+		
+	always @(posedge clk)
+		begin
+			if(rst)//will reset processor
+				begin
+					pc = 0;
+					f_taken_branch = 0;
+				end
+			if(f_taken_branch) //will branch to the address based on condition of branch
+				begin
+					pc = branch_address;
+					npc = pc + 4;
+					f_instruction_register[7:0] = instruction_memory[pc+3]; 
+					f_instruction_register[15:8] = instruction_memory[pc+2]; 
+					f_instruction_register[23:16] = instruction_memory[pc+1]; 
+					f_instruction_register[31:24] = instruction_memory[pc];
+					f_taken_branch = 1'b0;//reset f_taken_branch
+					j = 1'b0;
+				end
+			else if(j)
+				begin
+					f_instruction_register = 32'bz;
+				end
+			
+			else //will fetch next instructions
+				begin
+					pc = npc;
+					f_instruction_register[7:0] = instruction_memory[pc+3]; 
+					f_instruction_register[15:8] = instruction_memory[pc+2]; 
+					f_instruction_register[23:16] = instruction_memory[pc+1]; 
+					f_instruction_register[31:24] = instruction_memory[pc]; 
+					npc = pc + 4;										
+					
+					
+					////////////jal & jalr/////////
+					if( (f_instruction_register[6:0] == 7'b1101111) & (f_instruction_register[6:0] == 7'b1100111) )
+						begin
+							j = 1'b1;
+						end
+				end
+				
+				
+		end
+		
+		///////////////////////////decode stage/////////////////////////////////////////
+		
+	always @(negedge clk)
+		begin
+			if( ( (d_instruction_register[6:0] == 7'b0110011) | (d_instruction_register[6:0] == 7'b0010011) ) & (f_instruction_register[6:0] == 7'b0000011) ) //this will give 1 clock cycle delay stall for ldr followed by the r-type instruction
+				begin				
+					#20;
+				end
+		
+		
+			d_instruction_register  =  f_instruction_register; //carry forward instruction	
+			d_rs1_address = d_instruction_register[19:15]; //decoder ckt// will get the source operand1
+			d_rs2_address = d_instruction_register[24:20]; //decoder ckt// will get the source operand2
+			d_rd_address 	= d_instruction_register[11:7]; //decoder ckt// will get the destination operand
+			
+			case(d_instruction_register[6:0]) //opcode define type of instructions
+					7'b0110011: d_type = 3'b000;//define r-type instructions
+					7'b0010011: begin 
+										d_type = 3'b001;//define i-type instructions
+										d_imm = { {21{d_instruction_register[31]}},   d_instruction_register[30:25], d_instruction_register[24:21], d_instruction_register[20] } ; //generate immediate value
+									end
+					7'b0000011: begin
+										d_type = 3'b010;//define load type instructions
+										d_imm = { {21{d_instruction_register[31]}}, d_instruction_register[30:25], d_instruction_register[24:21], d_instruction_register[20] } ; //generate immediate value
+									end
+					7'b0100011: begin
+										d_type = 3'b011;//define store type instructions
+										d_imm = { {21{d_instruction_register[31]}}, d_instruction_register[30:25], d_instruction_register[11:8], d_instruction_register[7] } ; //generate immediate value
+									end	
+					7'b1100011:	begin
+										d_type = 3'b100;//define branch type instructions
+										d_imm = { {20{d_instruction_register[31]}}, d_instruction_register[7], d_instruction_register[30:25], d_instruction_register[11:8], 1'b0}; //generate immediate value
+									end
+					7'b1101111: begin
+										d_type = 3'b101;//define jump type instructions
+										d_imm = { {12{d_instruction_register[31]}}, d_instruction_register[19:12], d_instruction_register[20], d_instruction_register[30:25], d_instruction_register[24:21], 1'b0};//generate immediate value
+									end
+					7'b1100111: begin	
+										d_type = 3'b110;//define jump type of jalr instructions
+										d_imm = { {21{d_instruction_register[31]}},   d_instruction_register[30:25], d_instruction_register[24:21], d_instruction_register[20] } ; //generate immediate value
+									end
+			endcase 
+			
+			d_alu_op = {d_instruction_register[30],d_instruction_register[14:12]};//define operation to be performed in alu
+			
+			///////////////////////////forwarding unit//////////////////////
+			
+			if(d_rs1_address == d_ex_rd) //this is used to eliminate different hazards
+				d_forward_ctrl = 2'b00; //1st bit define ex or mem stage
+			else if(d_rs2_address == d_ex_rd)
+				d_forward_ctrl = 2'b01; //2nd bit define rs1 or rs2 of d_forward_ctrl
+			else if(d_rs1_address == d_mem_rd)
+				d_forward_ctrl = 2'b10;
+			else if(d_rs2_address == d_mem_rd)
+				d_forward_ctrl = 2'b11;
+			else
+				d_forward_ctrl = 2'bzz;
+
+		d_rs1 = reg_bank[d_rs1_address]; //get the data of source operand1
+		d_rs2 = reg_bank[d_rs2_address];//get the data of source operand2
+		d_shamt = d_rs2_address; //define shift amount
+		ex_s_rs2 = reg_bank[d_rs2_address]; //get the data of source operand2
+		
+
+			
+		end
+		
+		
+		////////////////////////////////execute stage/////////////////////////////////////////////////
+		always @(posedge clk)
+			begin
+				ex_rs1 = d_rs1; //define data of source operand1 which is forwarded from the previous stage
+				ex_alu_result = mem_result; //define data of alu result which is forwarded from the next stage
+				ex_mem_result = mem_result; //define data of memory which is forwarded from the next stage
+				ex_rs2 = d_rs2; //define data of source operand2 which is forwarded from the previous stage
+				ex_imm = d_imm; //define immediate data which is forwarded from the previous stage
+				ex_rd_address = d_rd_address; //define address of the destination register
+				ex_forward_ctrl = d_forward_ctrl; //define the bits for the operand selector
+				ex_type = d_type; //define type of instruction forwarded from the previous stage
+				ex_alu_op = d_alu_op; //define operation of instruction forwarded from the previous stage
+				ex_shamt = d_shamt; //define shift amount forwarded from the previous stage
+				d_ex_rd = ex_rd_address; //define the destination address forwarded from the previous stage 
+				
+				
+				/////////////////////////////////operand selector/////////////////////////////
+				operand1 = ex_rs1; //source operand1
+				operand2 = ex_rs2; //source operand2
+				case(ex_forward_ctrl) //make decision based on the forwarding unit
+						2'b00: operand1 = ex_alu_result; //alu result 
+						2'b10: operand1 = ex_mem_result; //memory data
+					endcase
+					
+				case({ex_type, ex_forward_ctrl })//selects appropriate operand based on the type of instruction and forward_ctrl signal
+						5'b001_00 : operand2 = ex_imm;
+						5'b001_01 : operand2 = ex_imm;
+						5'b001_10 : operand2 = ex_imm;
+						5'b001_11 : operand2 = ex_imm;
+						5'b001_zz : operand2 = ex_imm;
+						5'b010_?? : operand2 = ex_imm;
+						5'b011_?? : operand2 = ex_imm;
+						5'b000_00 : operand2 = ex_alu_result;
+						5'b000_01 : operand2 = ex_alu_result;
+						5'b000_10 : operand2 = ex_alu_result;
+						5'b000_11 : operand2 = ex_alu_result;
+						5'b???_11 : operand2 = ex_mem_result;
+					endcase
+		
+					
+
+				
+					
+				casez( { ex_type, ex_alu_op} )
+						////////////////////r-type//////////////////////////////
+						7'b000_0_000: ex_alu_result = operand1  +  operand2;//add
+						7'b000_1_000: ex_alu_result = operand1  -  operand2;//sub
+						7'b000_0_001: ex_alu_result = operand1 <<  operand2; //rd,rs1,rs2
+						7'b000_0_010: ex_alu_result = ($signed(operand1) < $signed(operand2))?1:0;// slt 
+						7'b000_0_011: ex_alu_result = (operand1 < operand2)?1:0; //sltu
+						7'b000_0_100: ex_alu_result = operand1 ^ operand2; //xor
+						7'b000_0_101: ex_alu_result = operand1 >> operand2; //srl shift right logical
+						7'b000_1_101: ex_alu_result = operand1 >>> operand2; //sra 1010101 111_101010
+						7'b000_0_110: ex_alu_result = operand1 | operand2;// or
+						7'b000_0_111: ex_alu_result = operand1 & operand2;//and
+						
+						////////////////////i - type/////////////////////////////
+						7'b001_?_000: ex_alu_result = operand1 + operand2; //addi
+						7'b001_?_010: ex_alu_result = ( $signed(operand1) < $signed(operand2) )?1:0; //slti
+						7'b001_?_011: ex_alu_result = ( operand1 < operand2)?1:0; //sltiu
+						7'b001_?_100: ex_alu_result =  operand1 ^ operand2;//xori
+						7'b001_?_110: ex_alu_result = operand1 | operand2; //ori
+						7'b001_?_111: ex_alu_result = operand1 & operand2; //andi
+						7'b001_?_001: ex_alu_result = operand1 << ex_shamt; //slli
+						7'b001_?_101: ex_alu_result = operand1 >> ex_shamt; //srli
+						7'b001_1_101: ex_alu_result = operand1 >>> operand2;//srai
+						
+						//////////////////load type//////////////////////////////
+						
+						7'b010_?_0??: begin
+												mem_rd_wr = 0; //if this is 0 that means read from the memory 
+												ex_alu_result = operand1 + operand2;//load
+												
+										  end
+										  
+						7'b010_?_100: begin	
+												mem_rd_wr = 0;
+												ex_alu_result = operand1 + operand2; //
+											end
+						7'b010_?_101: begin
+												mem_rd_wr = 0;
+												ex_alu_result = operand1 + operand2;
+											end
+						//////////////////store type////////////////////////////
+						7'b011_?_0??: begin
+												mem_rd_wr = 1; //if this is 1 that means write from the memory
+												ex_alu_result = operand1 + ex_s_rs2 ;//store
+												
+											end
+						//////////////////Branch type////////////////////////////00 00 bne
+						7'b100_?_00?: begin
+												psr = (operand1 == operand2)?000:001; //beq = 000, bne = 001
+												branch_address = npc + ex_imm - 8;
+												
+											end
+						7'b100_?_10?:begin
+												psr = ( $signed(operand1) < $signed(operand2) )?010:011; //blt = 010, bge = 011
+												branch_address = npc + ex_imm - 8;												
+										 end
+						7'b100_?_11?:begin
+												psr = ( operand1 < operand2)?100:101; //bltu = 100 , bgeu = 101
+												branch_address = npc + ex_imm - 8;
+										end
+						/////////////////jump type///////////////////////////
+						7'b101_?_???:begin	//jal
+												psr = 3'b110;
+												branch_address = npc + ex_imm - 8;
+												ex_alu_result = npc-8 ;
+										 end
+						/////////////////jalr type//////////////////
+						7'b110_?_???:begin
+												psr = 3'b111;
+												branch_address = ( operand1 + ex_imm) & (32'hffff_fffe );
+												ex_alu_result = npc - 8;
+										end
+										 
+						
+						endcase
+						
+					casez({ex_type, ex_alu_op})
+						7'b100_?_000: f_taken_branch = (psr == 3'b000)?1:0; //take branch if equal
+						7'b100_?_001: f_taken_branch = (psr == 3'b001)?1:0; //take branch if not equal
+						7'b100_?_100: f_taken_branch = (psr == 3'b010)?1:0; //take branch if less than
+						7'b101_?_101: f_taken_branch = (psr == 3'b011)?1:0; //take branch if greater or equal
+						7'b101_?_110: f_taken_branch = (psr == 3'b100)?1:0; //take branch if less than unsigned
+						7'b101_?_111: f_taken_branch = (psr == 3'b101)?1:0; //take branch if greater or equal unsigned
+						7'b101_?_???: f_taken_branch = (psr == 3'b110)?1:0;// jal
+						7'b110_?_???: f_taken_branch = (psr == 3'b111)?1:0;//jalr
+					endcase
+					
+				end
+				
+				
+				
+		//////////////////////////memory stage /////////////////////////////////////
+		always @(negedge clk)
+			begin
+				mem_address_result = ex_alu_result; //forward alu result
+				mem_write_data = ex_rs1; //forward data to be written in data memory
+				mem_rd_address = ex_rd_address; //forward the destination register address
+				mem_type = ex_type; //forward type of instruction
+				mem_alu_op = ex_alu_op; //forward aluop
+			
+			
+				if(!mem_rd_wr) //load instruction
+					begin
+							mem_read_data = data_memory[mem_address_result];
+							mem_result = mem_read_data;
+							mem_rd_wr = 1'bz; //reset condition
+					end
+				else if(mem_rd_wr) //store instruction
+					begin
+						case(mem_alu_op)
+							3'b000: data_memory[mem_address_result] = { {24{mem_write_data[7]}}, mem_write_data[7:0]}; //sb
+							3'b001: data_memory[mem_address_result] = { {16{mem_write_data[15]}}, mem_write_data[15:0]};//sh
+							3'b010: data_memory[mem_address_result] = mem_write_data;//sw
+						endcase	
+						mem_rd_wr = 1'bz; //reset condition
+					end
+				else
+					begin
+							mem_result = mem_address_result; //forward the result to be written in wb unit
+					end			
+			end
+			
+			
+			////////////////////write back stage////////////////////////////
+			always @(posedge clk)
+				begin
+					wb_type = mem_type; //forward the type of instruction 
+					wb_rd_address = ex_rd_address; //forward the destination register
+					wb_data = mem_result; //data to be written
+					wb_alu_op = mem_alu_op; //define alu op and forwarded
+					
+					casez(wb_type)
+						3'b00?: reg_bank[wb_rd_address] = wb_data; //r-type or i-type
+						3'b010: begin
+										case(wb_alu_op)
+											3'b000: reg_bank[wb_rd_address] = { {24{wb_data[7]}} , wb_data[7:0] }; //lb
+											3'b001: reg_bank[wb_rd_address] = { {16{wb_data[15]}} , wb_data[15:0] }; //lh
+											3'b010: reg_bank[wb_rd_address] = wb_data; //lw
+											3'b100: reg_bank[wb_rd_address] = { {24{1'b0}}, wb_data[7:0]};//lbu
+											3'b101: reg_bank[wb_rd_address] = { {16{1'b0}}, wb_data[15:0] };//lhu
+										endcase
+								  end
+						3'b101: begin
+										reg_bank[wb_rd_address] = wb_data;
+								  end
+						3'b110: begin	
+										reg_bank[wb_rd_address] = wb_data;
+								  end
+					endcase
+				end
+					
+					
+	
+	
+endmodule
